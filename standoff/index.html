@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D Shooter Final</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; user-select: none; -webkit-user-select: none; font-family: sans-serif; position: fixed; top: 0; left: 0; }
+        canvas { display: block; width: 100% !important; height: 100% !important; position: absolute; top: 0; left: 0; }
+        #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 20px; height: 20px; transform: translate(-50%, -50%); pointer-events: none; }
+        #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255,255,255,0.8); }
+        #crosshair::before { top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-50%); }
+        #crosshair::after { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); }
+        #crosshair-dot { position: absolute; top: 50%; left: 50%; width: 4px; height: 4px; background: #ff0000; border-radius: 50%; transform: translate(-50%, -50%); }
+        #joystick-area { position: absolute; bottom: 30px; left: 30px; width: 120px; height: 120px; background: rgba(255,255,255,0.15); border-radius: 50%; border: 2px solid rgba(255,255,255,0.3); pointer-events: auto; }
+        #joystick-stick { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: rgba(255,255,255,0.8); border-radius: 50%; transform: translate(-50%, -50%); }
+        .btn { position: absolute; border-radius: 50%; border: 2px solid rgba(255,255,255,0.5); color: #fff; font-size: 12px; font-weight: bold; display: flex; align-items: center; justify-content: center; pointer-events: auto; z-index: 10; }
+        #jump { bottom: 140px; right: 30px; width: 60px; height: 60px; background: rgba(50,180,50,0.7); }
+        #crouch { bottom: 30px; right: 110px; width: 60px; height: 60px; background: rgba(50,50,180,0.7); }
+        #fire { bottom: 30px; right: 20px; width: 80px; height: 80px; background: rgba(255,100,0,0.8); font-size: 16px; border: 3px solid #fff; }
+        #fullscreen { position: absolute; top: 10px; right: 10px; width: 45px; height: 45px; background: rgba(0,0,0,0.5); border: 2px solid #fff; border-radius: 8px; color: #fff; font-size: 20px; display: flex; align-items: center; justify-content: center; pointer-events: auto; z-index: 20; cursor: pointer; }
+        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); background: rgba(0,0,0,0.9); color: #fff; padding: 30px; border-radius: 10px; font-size: 18px; z-index: 9999; }
+        #score { position: absolute; top: 15px; left: 15px; color: #fff; font-size: 20px; pointer-events: none; text-shadow: 2px 2px 4px #000; }
+        #stats { position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); display: flex; gap: 15px; pointer-events: none; }
+        .stat-bar { width: 120px; height: 20px; background: rgba(0,0,0,0.5); border: 2px solid #fff; border-radius: 4px; overflow: hidden; position: relative; }
+        .stat-bar-fill { height: 100%; transition: width 0.2s; }
+        .stat-bar-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #fff; font-size: 11px; font-weight: bold; text-shadow: 1px 1px 2px #000; }
+        #hp-bar .stat-bar-fill { background: linear-gradient(to right, #ff0000, #ff4444); }
+        #armor-bar .stat-bar-fill { background: linear-gradient(to right, #0066ff, #00aaff); }
+        #damage-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(transparent 30%, rgba(255,0,0,0.3)); opacity: 0; pointer-events: none; transition: opacity 0.1s; }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="loading">Загрузка...</div>
+    <div id="score">Уничтожено: 0</div>
+    <div id="crosshair"><div id="crosshair-dot"></div></div>
+    <div id="damage-overlay"></div>
+    <div id="ui">
+        <div id="joystick-area"><div id="joystick-stick"></div></div>
+        <div id="jump" class="btn">JUMP</div>
+        <div id="crouch" class="btn">DOWN</div>
+        <div id="fire" class="btn">FIRE</div>
+        <div id="fullscreen">⛶</div>
+        <div id="stats">
+            <div id="hp-bar" class="stat-bar"><div class="stat-bar-fill" style="width:100%"></div><div class="stat-bar-text">HP: 100</div></div>
+            <div id="armor-bar" class="stat-bar"><div class="stat-bar-fill" style="width:100%"></div><div class="stat-bar-text">ARMOR: 100</div></div>
+        </div>
+    </div>
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { Octree } from 'three/addons/math/Octree.js';
+        import { Capsule } from 'three/addons/math/Capsule.js';
+
+        var GRAVITY = 50;
+        var JUMP_POWER = 14;
+        var MOVE_SPEED = 40;
+        var LOOK_SENSITIVITY = 0.012;
+        var SPAWN_POS = new THREE.Vector3(23.8, 5, -7.6);
+        var BULLET_SPEED = 120;
+        var ENEMY_BULLET_SPEED = 50;
+        var ENEMY_COUNT = 3;
+
+        var scene, camera, renderer, clock, weapon, muzzleFlash, weaponModel;
+        var worldOctree, playerCollider, playerVelocity, playerOnFloor = false;
+        var joyX = 0, joyY = 0, isCrouching = false;
+        var enemies = [], bullets = [], enemyBullets = [], score = 0;
+        var canShoot = true;
+        var jumpRequested = false;
+        var lastGroundTime = 0;
+        var mapLoaded = false;
+        var mapMeshes = [];
+        var playerHP = 100;
+        var playerArmor = 100;
+        var weaponLoaded = false;
+        var handsLoaded = false;
+        var enemyModelLoaded = false;
+        var enemyModel = null;
+
+        var touches = { joy: null, look: null, crouch: null };
+
+        init();
+
+        function init() {
+            clock = new THREE.Clock();
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb);
+            scene.fog = new THREE.Fog(0x87ceeb, 80, 250);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+            camera.rotation.order = 'YXZ';
+            scene.add(camera);
+
+            renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.insertBefore(renderer.domElement, document.body.firstChild);
+
+            scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.5));
+            var sun = new THREE.DirectionalLight(0xffffff, 1);
+            sun.position.set(50, 100, 50);
+            scene.add(sun);
+
+            worldOctree = new Octree();
+            playerCollider = new Capsule(new THREE.Vector3(0, 0.35, 0), new THREE.Vector3(0, 1.2, 0), 0.35);
+            playerCollider.translate(SPAWN_POS);
+            playerVelocity = new THREE.Vector3();
+
+            loadWeapon();
+            loadHands();
+            loadEnemyModel();
+            loadMap();
+            setupControls();
+            setupResize();
+
+            animate();
+        }
+
+        function setupResize() {
+            function onResize() {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+            window.addEventListener('resize', onResize);
+            window.addEventListener('orientationchange', function() {
+                setTimeout(onResize, 100);
+                setTimeout(onResize, 300);
+            });
+            window.addEventListener('fullscreenchange', onResize);
+            window.addEventListener('webkitfullscreenchange', onResize);
+        }
+
+        function loadWeapon() {
+            weapon = new THREE.Group();
+            muzzleFlash = new THREE.Mesh(
+                new THREE.SphereGeometry(0.04, 8, 8),
+                new THREE.MeshBasicMaterial({ color: 0xffff00, transparent: true, opacity: 0 })
+            );
+            muzzleFlash.position.set(0.62, -0.25, -0.6);
+            weapon.add(muzzleFlash);
+            camera.add(weapon);
+
+            var loader = new GLTFLoader();
+            loader.load('src/source/pistol.glb', function(gltf) {
+                weaponModel = gltf.scene;
+                weaponModel.scale.set(1, 1, 1);
+                weaponModel.position.set(0.62, -0.28, -0.2);
+                weaponModel.rotation.set(1 * Math.PI / 180, 81 * Math.PI / 180, 4 * Math.PI / 180);
+                weapon.add(weaponModel);
+                weaponLoaded = true;
+            }, undefined, function(error) {
+                createFallbackWeapon();
+            });
+        }
+
+        function createFallbackWeapon() {
+            var gunMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+            var slide = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.4), gunMat);
+            slide.position.set(0.6, -0.3, -0.4);
+            weapon.add(slide);
+            weaponLoaded = true;
+        }
+
+        function loadHands() {
+            var handGroup = new THREE.Group();
+            var skinMaterial = new THREE.MeshStandardMaterial({
+                color: 0xffccaa,
+                roughness: 0.7,
+                metalness: 0.1
+            });
+
+            function createFinger(length, width, depth, xPos, yPos, zPos) {
+                var fingerGroup = new THREE.Group();
+                var fingerMat = new THREE.MeshStandardMaterial({
+                    color: 0xffccaa,
+                    roughness: 0.7,
+                    metalness: 0.1
+                });
+                var proximal = new THREE.Mesh(
+                    new THREE.BoxGeometry(width, length, depth),
+                    fingerMat
+                );
+                proximal.position.set(0, -length/2, 0);
+                fingerGroup.add(proximal);
+                var distal = new THREE.Mesh(
+                    new THREE.BoxGeometry(width * 0.9, length * 0.8, depth * 0.9),
+                    fingerMat
+                );
+                distal.position.set(0, -length * 1.4, 0);
+                fingerGroup.add(distal);
+                fingerGroup.position.set(xPos, yPos, zPos);
+                return fingerGroup;
+            }
+
+            var rightHand = new THREE.Group();
+
+            var palm = new THREE.Mesh(
+                new THREE.BoxGeometry(0.08, 0.09, 0.06),
+                skinMaterial
+            );
+            palm.position.set(0, -0.045, 0);
+            rightHand.add(palm);
+
+            var thumb = createFinger(0.06, 0.035, 0.03, 0.04, 0.02, 0.02);
+            thumb.rotation.z = 0.3;
+            rightHand.add(thumb);
+
+            var indexFinger = createFinger(0.07, 0.03, 0.025, -0.01, -0.06, 0.02);
+            indexFinger.rotation.z = -0.1;
+            rightHand.add(indexFinger);
+
+            var middleFinger = createFinger(0.075, 0.028, 0.024, -0.035, -0.06, 0.01);
+            rightHand.add(middleFinger);
+
+            var ringFinger = createFinger(0.07, 0.026, 0.023, -0.06, -0.06, 0);
+            ringFinger.rotation.z = 0.05;
+            rightHand.add(ringFinger);
+
+            var pinky = createFinger(0.055, 0.022, 0.02, -0.08, -0.05, -0.01);
+            pinky.rotation.z = 0.1;
+            rightHand.add(pinky);
+
+            var wrist = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.035, 0.04, 0.12, 8),
+                skinMaterial
+            );
+            wrist.rotation.x = Math.PI / 2;
+            wrist.position.set(0, 0.1, 0);
+            rightHand.add(wrist);
+
+            rightHand.position.set(0.45, -0.38, -0.25);
+            rightHand.rotation.set(0.1, 0.15, -0.05);
+
+            handGroup.add(rightHand);
+
+            var leftHand = new THREE.Group();
+
+            var palmL = new THREE.Mesh(
+                new THREE.BoxGeometry(0.08, 0.09, 0.06),
+                skinMaterial
+            );
+            palmL.position.set(0, -0.045, 0);
+            leftHand.add(palmL);
+
+            var thumbL = createFinger(0.06, 0.035, 0.03, 0.04, 0.02, 0.02);
+            thumbL.rotation.z = -0.3;
+            leftHand.add(thumbL);
+
+            var indexFingerL = createFinger(0.07, 0.03, 0.025, -0.01, -0.06, 0.02);
+            indexFingerL.rotation.z = 0.1;
+            leftHand.add(indexFingerL);
+
+            var middleFingerL = createFinger(0.075, 0.028, 0.024, -0.035, -0.06, 0.01);
+            leftHand.add(middleFingerL);
+
+            var ringFingerL = createFinger(0.07, 0.026, 0.023, -0.06, -0.06, 0);
+            ringFingerL.rotation.z = -0.05;
+            leftHand.add(ringFingerL);
+
+            var pinkyL = createFinger(0.055, 0.022, 0.02, -0.08, -0.05, -0.01);
+            pinkyL.rotation.z = -0.1;
+            leftHand.add(pinkyL);
+
+            var wristL = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.035, 0.04, 0.12, 8),
+                skinMaterial
+            );
+            wristL.rotation.x = Math.PI / 2;
+            wristL.position.set(0, 0.1, 0);
+            leftHand.add(wristL);
+
+            leftHand.position.set(0.25, -0.32, -0.15);
+            leftHand.rotation.set(-0.1, -0.2, -0.15);
+
+            handGroup.add(leftHand);
+
+            var rightArm = new THREE.Group();
+            var armMat = new THREE.MeshStandardMaterial({
+                color: 0xffccaa,
+                roughness: 0.7,
+                metalness: 0.1
+            });
+
+            var forearm = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.045, 0.05, 0.35, 12),
+                armMat
+            );
+            forearm.rotation.x = Math.PI / 2;
+            forearm.position.set(0.55, -0.15, -0.35);
+            rightArm.add(forearm);
+
+            var upperArm = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.05, 0.055, 0.25, 12),
+                armMat
+            );
+            upperArm.rotation.x = Math.PI / 2;
+            upperArm.rotation.z = -0.2;
+            upperArm.position.set(0.7, -0.05, -0.45);
+            rightArm.add(upperArm);
+
+            var leftArm = new THREE.Group();
+
+            var forearmL = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.045, 0.05, 0.35, 12),
+                armMat
+            );
+            forearmL.rotation.x = Math.PI / 2;
+            forearmL.rotation.z = 0.15;
+            forearmL.position.set(0.15, -0.08, -0.2);
+            leftArm.add(forearmL);
+
+            var upperArmL = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.05, 0.055, 0.25, 12),
+                armMat
+            );
+            upperArmL.rotation.x = Math.PI / 2;
+            upperArmL.rotation.z = 0.3;
+            upperArmL.position.set(0.05, 0.02, -0.35);
+            leftArm.add(upperArmL);
+
+            handGroup.add(rightArm);
+            handGroup.add(leftArm);
+            handGroup.name = 'hands';
+            camera.add(handGroup);
+            handsLoaded = true;
+        }
+
+        function loadEnemyModel() {
+            var loader = new GLTFLoader();
+            loader.load('src/source/cs2_terrorist.glb', function(gltf) {
+                enemyModel = gltf.scene;
+                enemyModel.traverse(function(child) {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                });
+                var box = new THREE.Box3().setFromObject(enemyModel);
+                var size = new THREE.Vector3();
+                box.getSize(size);
+                var scale = 1.8 / Math.max(size.x, size.y, size.z);
+                enemyModel.scale.set(scale, scale, scale);
+                var center = new THREE.Vector3();
+                box.getCenter(center);
+                enemyModel.position.sub(center.multiplyScalar(scale));
+                enemyModelLoaded = true;
+            }, undefined, function(error) {
+                console.log('Failed to load enemy model, using fallback');
+            });
+        }
+
+        function createBullet(startPos, direction, isEnemy) {
+            var bullet = new THREE.Mesh(
+                new THREE.SphereGeometry(0.06, 6, 6),
+                new THREE.MeshBasicMaterial({ color: isEnemy ? 0xff0000 : 0xffcc00 })
+            );
+            bullet.position.copy(startPos);
+            scene.add(bullet);
+            var bulletData = {
+                mesh: bullet,
+                velocity: direction.clone().normalize().multiplyScalar(isEnemy ? ENEMY_BULLET_SPEED : BULLET_SPEED),
+                life: 3,
+                isEnemy: isEnemy
+            };
+            if (isEnemy) enemyBullets.push(bulletData);
+            else bullets.push(bulletData);
+        }
+
+        function checkLineOfSight(from, to) {
+            var direction = new THREE.Vector3().subVectors(to, from);
+            var distance = direction.length();
+            direction.normalize();
+            var raycaster = new THREE.Raycaster(from, direction, 0, distance);
+            var hits = raycaster.intersectObjects(mapMeshes, true);
+            return hits.length === 0;
+        }
+
+        function findValidSpawnPosition() {
+            var playerPos = camera.position.clone();
+            for (var attempts = 0; attempts < 150; attempts++) {
+                var angle = Math.random() * Math.PI * 2;
+                var dist = 15 + Math.random() * 25;
+                var testPos = new THREE.Vector3(playerPos.x + Math.cos(angle) * dist, playerPos.y + 15, playerPos.z + Math.sin(angle) * dist);
+                var downRay = new THREE.Raycaster(testPos, new THREE.Vector3(0, -1, 0), 0, 50);
+                var groundHits = downRay.intersectObjects(mapMeshes, true);
+                if (groundHits.length > 0) {
+                    var groundY = groundHits[0].point.y;
+                    testPos.y = groundY + 1;
+                    var blocked = false;
+                    var dirs = [new THREE.Vector3(1,0,0), new THREE.Vector3(-1,0,0), new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,-1)];
+                    for (var i = 0; i < dirs.length; i++) {
+                        var ray = new THREE.Raycaster(testPos, dirs[i], 0, 1.2);
+                        if (ray.intersectObjects(mapMeshes, true).length > 0) { blocked = true; break; }
+                    }
+                    if (!blocked) {
+                        var eyePos = testPos.clone(); eyePos.y += 0.5;
+                        if (checkLineOfSight(eyePos, camera.position)) return testPos;
+                    }
+                }
+            }
+            return new THREE.Vector3(SPAWN_POS.x + (Math.random()-0.5)*5, SPAWN_POS.y, SPAWN_POS.z + (Math.random()-0.5)*5);
+        }
+
+        function spawnEnemy() {
+            if (!mapLoaded) return;
+            var enemy;
+            if (enemyModelLoaded && enemyModel) {
+                enemy = enemyModel.clone();
+                enemy.scale.set(1, 1, 1);
+            } else {
+                enemy = new THREE.Group();
+                var bodyMat = new THREE.MeshStandardMaterial({ color: 0xcc0000 });
+                var body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.9, 0.4), bodyMat);
+                body.position.y = 1.0;
+                enemy.add(body);
+                var head = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), bodyMat);
+                head.position.y = 1.65;
+                enemy.add(head);
+                var legL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.6, 0.2), bodyMat);
+                legL.position.set(-0.2, 0.3, 0);
+                enemy.add(legL);
+                var legR = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.6, 0.2), bodyMat);
+                legR.position.set(0.2, 0.3, 0);
+                enemy.add(legR);
+            }
+            var spawnPos = findValidSpawnPosition();
+            enemy.position.copy(spawnPos);
+            enemy.userData.isEnemy = true;
+            enemy.userData.lastShot = Date.now() + Math.random() * 5000;
+            enemy.userData.shootInterval = 4000 + Math.random() * 4000;
+            enemy.userData.walkCycle = Math.random() * Math.PI * 2;
+            scene.add(enemy);
+            enemies.push(enemy);
+        }
+
+        function shoot() {
+            if (!canShoot) return;
+            canShoot = false;
+            muzzleFlash.material.opacity = 1;
+            setTimeout(() => muzzleFlash.material.opacity = 0, 50);
+            weapon.position.z += 0.05;
+            weapon.rotation.x -= 0.1;
+            var hands = camera.getObjectByName('hands');
+            if (hands) {
+                hands.userData.isRecoiling = true;
+                hands.userData.recoilTime = 0;
+            }
+            setTimeout(() => {
+                weapon.position.z -= 0.05;
+                weapon.rotation.x += 0.1;
+                if (hands) {
+                    hands.userData.isRecoiling = false;
+                }
+            }, 100);
+            var bulletStart = new THREE.Vector3();
+            camera.getWorldPosition(bulletStart);
+            var direction = new THREE.Vector3(0, 0, -1);
+            direction.applyQuaternion(camera.quaternion);
+            createBullet(bulletStart, direction, false);
+            setTimeout(() => canShoot = true, 150);
+        }
+
+        function enemyShoot(enemy) {
+            var now = Date.now();
+            if (now - enemy.userData.lastShot < enemy.userData.shootInterval) return;
+            var distToPlayer = enemy.position.distanceTo(camera.position);
+            if (distToPlayer > 35 || distToPlayer < 5) return;
+            var eyeHeight = enemyModelLoaded ? 1.7 : 1.5;
+            var enemyEyePos = enemy.position.clone(); enemyEyePos.y += eyeHeight;
+            if (!checkLineOfSight(enemyEyePos, camera.position)) return;
+            enemy.userData.lastShot = now;
+            enemy.userData.shootInterval = 4000 + Math.random() * 4000;
+            var gunHeight = enemyModelLoaded ? 1.2 : 1.0;
+            var gunPos = enemy.position.clone(); gunPos.y += gunHeight;
+            var targetPos = camera.position.clone();
+            if (Math.random() > 0.3) {
+                targetPos.x += (Math.random()-0.5)*6;
+                targetPos.y += (Math.random()-0.5)*5;
+                targetPos.z += (Math.random()-0.5)*6;
+            }
+            var direction = targetPos.sub(gunPos).normalize();
+            createBullet(gunPos, direction, true);
+        }
+
+        function takeDamage(amount) {
+            document.getElementById('damage-overlay').style.opacity = '1';
+            setTimeout(() => document.getElementById('damage-overlay').style.opacity = '0', 150);
+            if (playerArmor > 0) {
+                playerArmor = Math.max(0, playerArmor - amount * 0.7);
+                playerHP = Math.max(0, playerHP - amount * 0.3);
+            } else { playerHP = Math.max(0, playerHP - amount); }
+            updateStatsUI();
+            if (playerHP <= 0) respawnPlayer();
+        }
+
+        function respawnPlayer() {
+            playerHP = 100; playerArmor = 100;
+            playerCollider.start.copy(SPAWN_POS); playerCollider.start.y += 0.35;
+            playerCollider.end.set(SPAWN_POS.x, SPAWN_POS.y + 1.2, SPAWN_POS.z);
+            playerVelocity.set(0, 0, 0);
+            updateStatsUI();
+        }
+
+        function updateStatsUI() {
+            document.querySelector('#hp-bar .stat-bar-fill').style.width = playerHP + '%';
+            document.querySelector('#hp-bar .stat-bar-text').textContent = 'HP: ' + Math.round(playerHP);
+            document.querySelector('#armor-bar .stat-bar-fill').style.width = playerArmor + '%';
+            document.querySelector('#armor-bar .stat-bar-text').textContent = 'ARMOR: ' + Math.round(playerArmor);
+        }
+
+        function updateBullets(dt) {
+            [...bullets, ...enemyBullets].forEach(bullet => {
+                var oldPos = bullet.mesh.position.clone();
+                bullet.mesh.position.add(bullet.velocity.clone().multiplyScalar(dt));
+                bullet.life -= dt;
+                var ray = new THREE.Raycaster(oldPos, bullet.velocity.clone().normalize(), 0, bullet.velocity.length() * dt + 0.1);
+                if (ray.intersectObjects(mapMeshes, true).length > 0) bullet.life = 0;
+            });
+            for (var i = bullets.length - 1; i >= 0; i--) {
+                var b = bullets[i];
+                var hit = false;
+                for (var j = enemies.length - 1; j >= 0; j--) {
+                    var e = enemies[j];
+                    var hitPos = e.position.clone().add(new THREE.Vector3(0, enemyModelLoaded ? 0.9 : 1, 0));
+                    var hitRadius = enemyModelLoaded ? 1.5 : 1.2;
+                    if (b.mesh.position.distanceTo(hitPos) < hitRadius) {
+                        scene.remove(e); enemies.splice(j, 1);
+                        score++; document.getElementById('score').textContent = 'Уничтожено: ' + score;
+                        setTimeout(spawnEnemy, 5000); hit = true; break;
+                    }
+                }
+                if (hit || b.life <= 0) { scene.remove(b.mesh); bullets.splice(i, 1); }
+            }
+            for (var i = enemyBullets.length - 1; i >= 0; i--) {
+                var b = enemyBullets[i];
+                if (b.mesh.position.distanceTo(camera.position) < 0.8) { takeDamage(10); b.life = 0; }
+                if (b.life <= 0) { scene.remove(b.mesh); enemyBullets.splice(i, 1); }
+            }
+        }
+
+        function updateEnemies(dt) {
+            enemies.forEach(enemy => {
+                var dirToPlayer = camera.position.clone().sub(enemy.position);
+                var dist = dirToPlayer.length();
+                dirToPlayer.y = 0; dirToPlayer.normalize();
+                enemy.lookAt(camera.position.x, enemy.position.y, camera.position.z);
+                var eyeHeight = enemyModelLoaded ? 1.7 : 1.5;
+                var eyePos = enemy.position.clone(); eyePos.y += eyeHeight;
+                var canSee = checkLineOfSight(eyePos, camera.position);
+                var isMoving = false;
+                if (canSee && dist > 6 && dist < 35) {
+                    enemy.position.add(dirToPlayer.multiplyScalar(2 * dt));
+                    isMoving = true;
+                    enemy.userData.walkCycle = (enemy.userData.walkCycle || 0) + dt * 8;
+                }
+                var ray = new THREE.Raycaster(new THREE.Vector3(enemy.position.x, enemy.position.y + 3, enemy.position.z), new THREE.Vector3(0, -1, 0), 0, 10);
+                var hits = ray.intersectObjects(mapMeshes, true);
+                if (hits.length > 0) enemy.position.y = hits[0].point.y;
+                if (canSee) enemyShoot(enemy);
+                if (isMoving && enemyModelLoaded) {
+                    enemy.children.forEach(child => {
+                        if (child.name && child.name.includes('leg')) {
+                            child.rotation.x = Math.sin(enemy.userData.walkCycle) * 0.3;
+                        }
+                    });
+                }
+            });
+        }
+
+        function setupControls() {
+            var joyArea = document.getElementById('joystick-area');
+            var joyStick = document.getElementById('joystick-stick');
+            var lastLook = { x: 0, y: 0 };
+            document.addEventListener('touchstart', (e) => {
+                for (var t of e.changedTouches) {
+                    var target = document.elementFromPoint(t.clientX, t.clientY);
+                    if (!target) continue;
+                    if (target.id === 'fullscreen') { toggleFullscreen(); return; }
+                    if (target === joyArea || joyArea.contains(target)) touches.joy = t.identifier;
+                    else if (target.id === 'fire') shoot();
+                    else if (target.id === 'jump') jumpRequested = true;
+                    else if (target.id === 'crouch') { touches.crouch = t.identifier; isCrouching = true; }
+                    else if (!target.classList.contains('btn')) { touches.look = t.identifier; lastLook.x = t.clientX; lastLook.y = t.clientY; }
+                }
+            }, { passive: false });
+            document.addEventListener('touchmove', (e) => {
+                for (var t of e.changedTouches) {
+                    if (t.identifier === touches.joy) {
+                        var rect = joyArea.getBoundingClientRect();
+                        var dx = t.clientX - (rect.left + rect.width / 2);
+                        var dy = t.clientY - (rect.top + rect.height / 2);
+                        var dist = Math.hypot(dx, dy);
+                        if (dist > 45) { dx *= 45/dist; dy *= 45/dist; }
+                        joyStick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+                        joyX = dx / 45; joyY = dy / 45;
+                    } else if (t.identifier === touches.look) {
+                        camera.rotation.y -= (t.clientX - lastLook.x) * LOOK_SENSITIVITY;
+                        camera.rotation.x -= (t.clientY - lastLook.y) * LOOK_SENSITIVITY;
+                        camera.rotation.x = Math.max(-1.4, Math.min(1.4, camera.rotation.x));
+                        lastLook.x = t.clientX; lastLook.y = t.clientY;
+                    }
+                }
+            }, { passive: false });
+            document.addEventListener('touchend', (e) => {
+                for (var t of e.changedTouches) {
+                    if (t.identifier === touches.joy) { touches.joy = null; joyX = 0; joyY = 0; joyStick.style.transform = 'translate(-50%, -50%)'; }
+                    else if (t.identifier === touches.look) touches.look = null;
+                    else if (t.identifier === touches.crouch) { touches.crouch = null; isCrouching = false; }
+                }
+            });
+            document.getElementById('fullscreen').onclick = toggleFullscreen;
+            document.addEventListener('keydown', (e) => {
+                if (e.code === 'KeyW') joyY = -1; if (e.code === 'KeyS') joyY = 1; if (e.code === 'KeyA') joyX = -1; if (e.code === 'KeyD') joyX = 1;
+                if (e.code === 'Space') jumpRequested = true; if (e.code === 'ShiftLeft') isCrouching = true;
+                if (e.code === 'KeyF') toggleFullscreen();
+            });
+            document.addEventListener('keyup', (e) => {
+                if (['KeyW','KeyS','KeyA','KeyD'].includes(e.code)) { joyX = 0; joyY = 0; }
+                if (e.code === 'ShiftLeft') isCrouching = false;
+            });
+            document.addEventListener('mousedown', (e) => { if (e.button === 0) shoot(); });
+            document.addEventListener('mousemove', (e) => {
+                if (document.pointerLockElement) {
+                    camera.rotation.y -= e.movementX * 0.002;
+                    camera.rotation.x -= e.movementY * 0.002;
+                    camera.rotation.x = Math.max(-1.4, Math.min(1.4, camera.rotation.x));
+                }
+            });
+            renderer.domElement.onclick = () => { if (window.innerWidth > 1000) renderer.domElement.requestPointerLock(); };
+        }
+
+        function toggleFullscreen() {
+            var d = document; var e = d.documentElement;
+            var isF = d.fullscreenElement || d.webkitFullscreenElement || d.msFullscreenElement;
+            if (!isF) {
+                if (e.requestFullscreen) e.requestFullscreen().catch(()=>{});
+                else if (e.webkitRequestFullscreen) e.webkitRequestFullscreen();
+                else if (e.msRequestFullscreen) e.msRequestFullscreen();
+            } else {
+                if (d.exitFullscreen) d.exitFullscreen().catch(()=>{});
+                else if (d.webkitExitFullscreen) d.webkitExitFullscreen();
+                else if (d.msExitFullscreen) d.msExitFullscreen();
+            }
+        }
+
+        function loadMap() {
+            new GLTFLoader().load('src/source/untitled.glb', function(gltf) {
+                gltf.scene.traverse(c => { if (c.isMesh) mapMeshes.push(c); });
+                scene.add(gltf.scene); worldOctree.fromGraphNode(gltf.scene);
+                mapLoaded = true; document.getElementById('loading').style.display = 'none';
+                for (var i = 0; i < ENEMY_COUNT; i++) setTimeout(spawnEnemy, i * 1000);
+            });
+        }
+
+        function updatePlayer(dt) {
+            var targetH = isCrouching ? 0.7 : 1.2;
+            playerCollider.end.y = playerCollider.start.y + (targetH - 0.35);
+            if (!playerOnFloor) playerVelocity.y -= GRAVITY * dt;
+            var damping = Math.exp(-6 * dt) - 1;
+            playerVelocity.x += playerVelocity.x * damping; playerVelocity.z += playerVelocity.z * damping;
+            var speed = (isCrouching ? 10 : MOVE_SPEED) * dt;
+            var forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+            forward.y = 0; forward.normalize();
+            var right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
+            playerVelocity.x += forward.x * (-joyY * speed) + right.x * (joyX * speed);
+            playerVelocity.z += forward.z * (-joyY * speed) + right.z * (joyX * speed);
+            playerCollider.translate(playerVelocity.clone().multiplyScalar(dt));
+            var result = worldOctree.capsuleIntersect(playerCollider);
+            playerOnFloor = false;
+            if (result) {
+                playerOnFloor = result.normal.y > 0.1;
+                if (!playerOnFloor) playerVelocity.addScaledVector(result.normal, -result.normal.dot(playerVelocity));
+                if (playerOnFloor && playerVelocity.y < 0) playerVelocity.y = 0;
+                playerCollider.translate(result.normal.multiplyScalar(result.depth));
+            }
+            if (playerOnFloor) lastGroundTime = Date.now();
+            if (jumpRequested && (playerOnFloor || (Date.now() - lastGroundTime < 200))) { playerVelocity.y = JUMP_POWER; playerOnFloor = false; lastGroundTime = 0; }
+            jumpRequested = false;
+            camera.position.copy(playerCollider.end);
+            if (camera.position.y < -30) respawnPlayer();
+        }
+
+        function animate() {
+            var dt = Math.min(0.05, clock.getDelta());
+            updatePlayer(dt);
+            updateBullets(dt);
+            updateEnemies(dt);
+
+            var hands = camera.getObjectByName('hands');
+            if (hands) {
+                if (Math.abs(joyX) > 0.1 || Math.abs(joyY) > 0.1) {
+                    var bob = Date.now() * 0.01;
+                    var bobAmount = isCrouching ? 0.004 : 0.008;
+                    hands.position.y = Math.sin(bob) * bobAmount;
+                    hands.position.x = Math.cos(bob * 0.5) * (bobAmount * 0.5);
+                    hands.rotation.x = Math.sin(bob * 0.5) * 0.01;
+                } else {
+                    hands.position.y = 0;
+                    hands.position.x = 0;
+                    hands.rotation.x = 0;
+                }
+
+                if (hands.userData.isRecoiling) {
+                    hands.userData.recoilTime = (hands.userData.recoilTime || 0) + dt;
+                    var recoilProgress = hands.userData.recoilTime / 0.1;
+                    var recoilOffset = Math.sin(recoilProgress * Math.PI) * 0.05;
+                    hands.position.z += recoilOffset;
+                    hands.rotation.x -= recoilOffset * 2;
+                }
+            }
+
+            if (Math.abs(joyX) > 0.1 || Math.abs(joyY) > 0.1) {
+                var bob = Date.now() * 0.01;
+                var bobAmount = isCrouching ? 0.004 : 0.008;
+                weapon.position.y = Math.sin(bob) * bobAmount;
+                weapon.position.x = Math.cos(bob * 0.5) * (bobAmount * 0.5);
+            } else { weapon.position.y = 0; weapon.position.x = 0; }
+            renderer.render(scene, camera);
+            requestAnimationFrame(animate);
+        }
+    </script>
+</body>
+</html>
